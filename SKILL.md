@@ -1,90 +1,148 @@
 ---
 name: workday-navigation
-description: Navigate Cisco Workday via Chrome DevTools MCP. Use when the user asks to open Workday, navigate to a Workday section (Directory, Time, Absence, Pay, etc.), or interact with the Workday UI in Chrome.
+description: Navigate Cisco Workday via Chrome DevTools MCP and populate Time entries from PagerDuty on-call coverage. Use when the user asks to open Workday, navigate to Workday sections (Directory, Time, Absence, Pay), or fill weekly/monthly timesheets from PagerDuty data.
 ---
 
 # Workday Navigation via Chrome DevTools MCP
 
-Control a Chrome browser to open and navigate Cisco Workday using the `user-chrome-devtools` MCP server.
+Control a Chrome browser to open and navigate Cisco Workday using the Chrome DevTools MCP server.
 
 ## Workflow: Open Workday and Navigate
 
 ### Step 1: Launch Chrome and connect
 
-First, try calling `list_pages`. If it returns an error or indicates no browser is connected, launch Chrome with remote debugging via the Shell tool:
+First, call `list_pages`. If no browser is connected, launch Chrome with remote debugging:
 
 ```bash
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 &
 ```
 
-Run this in the background (`block_until_ms: 0`), wait a couple of seconds, then call `list_pages` again to confirm the connection.
-
-If a Workday tab already exists (URL contains `myworkday.com` or `workday.cisco.com`), use `select_page` to focus it and skip to Step 3.
+If a Workday tab already exists (URL contains `myworkday.com` or `workday.cisco.com`), select it and continue.
 
 ### Step 2: Navigate to Workday
 
-Call `navigate_page` with `type: "url"` and `url: "https://workday.cisco.com/"`.
+Call `navigate_page` with `url: "https://workday.cisco.com/"`.
 
-The page will redirect to Duo SSO (`sso.duosecurity.com`). **Stop and tell the user to complete SSO login**, then wait for them to confirm.
-
-After the user confirms login, call `take_snapshot` to verify the page title contains "Home - Workday" or similar. If still on SSO, ask the user to try again.
+If redirected to Duo SSO (`sso.duosecurity.com`), stop and ask the user to complete login. After confirmation, verify with `take_snapshot` that the page is Workday Home.
 
 ### Step 3: Navigate via Menu
 
-Call `take_snapshot` to get the current page state.
+1. `take_snapshot`
+2. Click `button "MENU"`
+3. Click destination link
 
-If the user requested a specific destination, open the menu and click the matching link:
+Known labels:
+- `Directory`
+- `Time`
+- `Absence`
+- `Pay`
+- `Personal Information`
 
-1. Call `click` on the **MENU** button (look for `button "MENU"` in the snapshot)
-2. Call `take_snapshot` (with `includeSnapshot: true` on the click, or separately) to see the menu items
-3. Find and `click` the requested destination link
+### Step 4: Confirm page
 
-#### Known menu structure (under "Personal" section)
+Call `take_snapshot` and confirm heading/title matches the requested destination.
 
-| Destination | Menu label |
-|-------------|-----------|
-| Directory | `link "Directory"` under Organization |
-| Time / Timesheet | `link "Time"` under Personal |
-| Absence | `link "Absence"` under Personal |
-| Pay | `link "Pay"` under Personal |
-| Personal Info | `link "Personal Information"` under Personal |
+## Workflow: Compute PagerDuty Worked Time for a Month
 
-### Step 4: Confirm navigation
+Use this when filling Workday time from PagerDuty on-call coverage.
 
-After clicking a menu item, call `take_snapshot` to verify the page loaded correctly. Report the page heading back to the user.
+### Step 1: Confirm target month
 
-## Workflow: Fill Timesheet Entry (Automatic Quick Add)
+If not explicit, ask for month (`February 2026`, etc.).
 
-If the user asks to fill a timesheet entry, navigate to Time first (follow steps above), then use **Quick Add** as the default path:
+### Step 2: Get PagerDuty user id
 
-1. `take_snapshot` on the Time page
-2. If you are on the summary page with links (`This Week` / `Last Week`), click `This Week` to open the weekly Enter Time calendar
-3. Click `Actions` and choose `Quick Add`
-4. In Quick Add step 1, set `Time Type` and click `Next`
-5. In Quick Add step 2, fill `In` and `Out`, then check the target day checkbox
-6. Click `OK` to save as draft
-7. Wait for `Quick Add Complete`, then `take_snapshot` and verify the new entry is present with `Not Submitted`
-8. **Never click Submit** -- only fill and save as draft
+Call `mcp__pagerduty__get_user_data` and capture `id`.
 
-### Automatic defaults when user says "yes/do it"
+### Step 3: Query on-call coverage
 
-If the user does not provide date/time details, proceed automatically with these defaults:
+Use UTC month boundaries:
+- `since = YYYY-MM-01T00:00:00Z`
+- `until = first day of next month at 00:00:00Z`
 
-- Time Type: `On Call Standby Hours` (or `timeType` from config)
-- Start (`In`): `09:00` (or `fixedStartTime` from config)
-- End (`Out`): start + 8 hours (for `09:00`, use `17:00`)
-- Date: today in the user's current week view
-- Day selection: choose the weekday checkbox for today's date (localized labels are fine, e.g. `terça-feira` for Tuesday)
+Call `mcp__pagerduty__list_oncalls` with `query_model` as a JSON string:
 
-When possible, read defaults from `pd-workday-ui-sync/workday.selectors.json` first; fall back to the values above if missing.
+```json
+"{\"since\":\"YYYY-MM-01T00:00:00Z\",\"until\":\"YYYY-MM-01T00:00:00Z\",\"user_ids\":[\"<USER_ID>\"],\"limit\":100}"
+```
 
-If today's entry already exists with the same type/time range, do not add a duplicate; report it back to the user.
+Ignore rows missing `start` or `end`.
+
+### Step 4: Compute per-day hours
+
+Split each interval by local calendar day and compute covered hours/day.
+
+Output map:
+- `YYYY-MM-DD -> hours`
+
+Skip zero-hour days.
+
+## Workflow: Fill Timesheet from PagerDuty Month
+
+### Step 1: Open Time
+
+Navigate to **Time**.
+
+### Step 2: Open needed week(s)
+
+Use **Select Week**, **Previous Week**, or **Next Week** to reach each week containing non-zero days.
+
+### Step 3: Preferred entry method: Actions -> Quick Add
+
+Prefer Quick Add over clicking day cells.
+
+1. Click `Actions` -> `Quick Add`
+2. Set `Time Type` to `On Call Standby Hours`
+3. Click `Next`
+4. Enter time blocks and select relevant day checkboxes
+5. Click `OK`
+
+If In/Out fields are shown:
+- Full day: `00:00` to `23:59`
+- Partial day `H` hours: `00:00` to `HH:MM`
+
+Examples:
+- `7h` -> `00:00-07:00`
+- `17h` -> `00:00-17:00`
+
+### Step 4: Validate each week
+
+Use `take_snapshot` and verify:
+- Day rows show expected `Hours: X`
+- Summary `On Call Standby (Hours)` equals expected weekly total
+- Entries show `Not Submitted`
+
+Never submit automatically.
+
+## Recovery Playbook (Observed in Real Run)
+
+Use these when Workday behaves inconsistently.
+
+### A) `Invalid response` browser alert after clicking Next
+
+- Call `handle_dialog` with `action: "accept"`
+- Re-snapshot and continue
+
+### B) `Discard Changes?` modal appears unexpectedly
+
+- Click `Continue` when keeping in-progress edits
+- Click `Discard` only when intentionally restarting the current Quick Add flow
+
+### C) Quick Add stuck with `Next`/`Cancel` disabled
+
+- Re-focus `Time Type`, press `Enter` to confirm selected value
+- Re-check for transient `Discard Changes?` modal and close it
+- If still stuck, close Quick Add and reopen from `Actions -> Quick Add`
+
+### D) Action click timeout or stale UIDs
+
+- Take a fresh snapshot and retry with current UIDs
+- Keep waits short and retry in small steps (prefer <=5s waits with re-check)
 
 ## Tips
 
-- Always prefer `take_snapshot` over `take_screenshot` for understanding page structure
-- Use `includeSnapshot: true` on clicks when you need to see the result immediately
-- Workday is slow -- if a snapshot looks empty or unchanged, wait a moment and retry
-- Element UIDs change between snapshots; always use UIDs from the **most recent** snapshot
-- Quick Add is more reliable than clicking day cells directly when the calendar grid is hard to target
-- Weekly labels may be localized (example: Portuguese `segunda-feira`, `terça-feira`, etc.)
+- Prefer `take_snapshot` over screenshots
+- Workday is slow and dynamic; re-snapshot frequently
+- UIDs change often; only use UIDs from the latest snapshot
+- Workday date format is `DD/MM/YYYY`
+- Save as draft only; do not click submit unless the user explicitly asks
