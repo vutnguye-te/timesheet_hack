@@ -1,0 +1,27 @@
+{
+  "name": "workday-oncall-automation",
+  "version": "1.0.0",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "test:ui": "npx playwright test --ui",
+    "test:codegen": "npx playwright codegen",
+    "oncall:auth": "npx playwright test --project=auth-setup --headed",
+    "oncall:enter": "npx playwright test --project=workday --headed",
+    "oncall:dry-run": "npx tsx src/oncall-entries.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^25.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
