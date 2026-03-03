@@ -1,0 +1,14 @@
+{
+  "timesheetPageUrl": "https://workday.cisco.com/",
+  "timeType": "Standby",
+  "workdayFlowControllerUrl": "https://wd5.myworkday.com/cisco/flowController.htmld",
+  "flowFieldPrefix": "1089",
+  "selectors": {
+    "addRowButton": "button:has-text(\"Add\")",
+    "dateInput": "input[aria-label=\"Date\"]",
+    "hoursInput": "input[aria-label=\"Hours\"]",
+    "timeTypeInput": "input[aria-label=\"Time Type\"]",
+    "saveButton": "button:has-text(\"Save\")",
+    "submitButton": "button:has-text(\"Submit\")"
+  }
+}
