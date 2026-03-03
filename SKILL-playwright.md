@@ -13,7 +13,7 @@ Falls back to Chrome DevTools MCP on port 9222 for diagnosing failures.
 Before first use:
 1. **Node.js** v18+
 2. **Install dependencies**: `npm install`
-3. **Install Playwright browser**: `npx playwright install chromium`
+3. **System Chrome** installed (Playwright uses it via `channel: 'chrome'` — no bundled browser download needed)
 
 Auth is handled automatically — if the session is expired when running, the browser will prompt for SSO + Duo MFA and continue once login is detected.
 

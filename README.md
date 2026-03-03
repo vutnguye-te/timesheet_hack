@@ -5,7 +5,7 @@ Playwright automation that enters on-call standby and worked hours into Workday 
 ## Prerequisites
 
 - **Node.js** v18+
-- **Chrome** (Playwright will install its own Chromium, but system Chrome works for debugging)
+- **Chrome** (Playwright uses system Chrome via `channel: 'chrome'` — no separate browser download needed)
 
 ## Setup
 
@@ -14,7 +14,6 @@ git clone git@github.com:vutnguye-te/timesheet_hack.git
 cd timesheet_hack
 git checkout nga
 npm install
-npx playwright install chromium
 ```
 
 Auth is handled automatically — if the session is expired when you run the automation, the browser will prompt for SSO + Duo MFA and continue once login is detected. No separate auth step needed.
