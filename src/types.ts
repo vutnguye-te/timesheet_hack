@@ -19,6 +19,7 @@ export interface Incident {
 export interface OnCallParams {
   startDate: string;  // YYYY-MM-DD
   endDate: string;    // YYYY-MM-DD
+  shiftStartTime?: string; // HH:MM (24h) — start time on first day (default 00:00)
   shiftEndTime: string; // HH:MM (24h) — end time on last day
   incidents: Incident[];
 }

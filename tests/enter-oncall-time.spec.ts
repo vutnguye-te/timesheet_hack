@@ -31,6 +31,7 @@ function parseIncidents(raw: string | undefined): Incident[] {
 var params: OnCallParams = {
   startDate: getRequiredEnv('ONCALL_START'),
   endDate: getRequiredEnv('ONCALL_END'),
+  shiftStartTime: process.env.ONCALL_SHIFT_START,
   shiftEndTime: getRequiredEnv('ONCALL_SHIFT_END'),
   incidents: parseIncidents(process.env.ONCALL_INCIDENTS),
 };
@@ -40,7 +41,9 @@ var weeks = calculateEntries(params);
 
 var totalEntries = weeks.reduce((sum, w) => sum + w.entries.length, 0);
 console.log(`\nOn-Call Time Entry: ${params.startDate} to ${params.endDate}`);
-console.log(`Shift end: ${params.shiftEndTime}, Incidents: ${params.incidents.length}`);
+console.log(
+  `Shift start: ${params.shiftStartTime || '00:00'}, Shift end: ${params.shiftEndTime}, Incidents: ${params.incidents.length}`,
+);
 console.log(`Calculated: ${weeks.length} week(s), ${totalEntries} Quick Add entries\n`);
 
 // --- Test ---

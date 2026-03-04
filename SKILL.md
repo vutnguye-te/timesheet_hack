@@ -1,148 +1,97 @@
 ---
-name: workday-navigation
-description: Navigate Cisco Workday via Chrome DevTools MCP and populate Time entries from PagerDuty on-call coverage. Use when the user asks to open Workday, navigate to Workday sections (Directory, Time, Absence, Pay), or fill weekly/monthly timesheets from PagerDuty data.
+name: workday-api-timesheet
+description: Fill Cisco Workday timesheets by calling Workday endpoints directly from an authenticated Chrome session (no UI field typing). Use when the user asks for fastest timesheet population, API-first entry, or to avoid slow/repetitive Workday UI interactions.
 ---
 
-# Workday Navigation via Chrome DevTools MCP
+# Workday API Timesheet Fill
 
-Control a Chrome browser to open and navigate Cisco Workday using the Chrome DevTools MCP server.
+Use Chrome DevTools page-context `fetch` calls to submit Quick Add blocks directly through Workday endpoints.
 
-## Workflow: Open Workday and Navigate
+## Workflow: Build Month Plan
 
-### Step 1: Launch Chrome and connect
+### Step 1: Compute expected blocks from PagerDuty
 
-First, call `list_pages`. If no browser is connected, launch Chrome with remote debugging:
+- Query PagerDuty on-call coverage for the target month.
+- Split intervals by local day and compute daily hours.
+- Group by week into block entries:
+  - Full day: `00:00-23:59`
+  - Partial day: `00:00-HH:MM`
 
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 &
-```
+### Step 2: Define target block structure
 
-If a Workday tab already exists (URL contains `myworkday.com` or `workday.cisco.com`), select it and continue.
+Use weekday numbers aligned with Workday:
+- `1=Mon ... 7=Sun`
 
-### Step 2: Navigate to Workday
+Example:
+- `[{in:"00:00", out:"23:59", days:[6,7]}, {in:"00:00", out:"07:00", days:[5]}]`
 
-Call `navigate_page` with `url: "https://workday.cisco.com/"`.
+## Workflow: Capture Dynamic Flow Values
 
-If redirected to Duo SSO (`sso.duosecurity.com`), stop and ask the user to complete login. After confirmation, verify with `take_snapshot` that the page is Workday Home.
+### Step 1: Open a fresh Quick Add flow for target week
 
-### Step 3: Navigate via Menu
+Call week-specific `rel-task/2997$4817.htmld` endpoint in authenticated session.
 
-1. `take_snapshot`
-2. Click `button "MENU"`
-3. Click destination link
+### Step 2: Extract dynamic values from response
 
-Known labels:
-- `Directory`
-- `Time`
-- `Absence`
-- `Pay`
-- `Personal Information`
+From JSON response payload, capture:
+- `_flowExecutionKey` (example: `e41s1`)
+- `Next` ref (example: `1047/wd:Next`)
+- Submit container id for Next (prefix from `Start_Date` ref, example: `1047`)
+- `In_Time` ref (example: `476/wd:In_Time`)
+- `Out_Time` ref (example: `476/wd:Out_Time`)
+- `OK` ref (example: `591/wd:OK`)
+- Weekday refs prefix (example: `591/wd:Weekday_1` ... `591/wd:Weekday_7`)
 
-### Step 4: Confirm page
+From `window.workday`, capture:
+- `sessionSecureToken`
+- `clientVersion` (for `x-workday-client`)
 
-Call `take_snapshot` and confirm heading/title matches the requested destination.
+Never reuse flow values across different flow instances.
 
-## Workflow: Compute PagerDuty Worked Time for a Month
+## Workflow: Submit One Block via API
 
-Use this when filling Workday time from PagerDuty on-call coverage.
+Use `POST /cisco/flowController.htmld` with form-urlencoded body.
 
-### Step 1: Confirm target month
+### Step 1: Select time type
 
-If not explicit, ask for month (`February 2026`, etc.).
+- `_eventId_add=<timeTypeId>` (usually `604`)
+- set `2396$6` for `On Call Standby Hours`
 
-### Step 2: Get PagerDuty user id
+### Step 2: Transition to detail step
 
-Call `mcp__pagerduty__get_user_data` and capture `id`.
+- `_eventId_submit=<nextSubmitId>`
+- `change-summary` containing `wd:Next Ref="<nextRef>"`
 
-### Step 3: Query on-call coverage
+### Step 3: Set time bounds
 
-Use UTC month boundaries:
-- `since = YYYY-MM-01T00:00:00Z`
-- `until = first day of next month at 00:00:00Z`
+- `_eventId_validate=<inRef>` with `<inRef>_H/_m/_Y/_M/_D`
+- `_eventId_validate=<outRef>` with `<outRef>_H/_m/_Y/_M/_D`
 
-Call `mcp__pagerduty__list_oncalls` with `query_model` as a JSON string:
+### Step 4: Select weekdays
 
-```json
-"{\"since\":\"YYYY-MM-01T00:00:00Z\",\"until\":\"YYYY-MM-01T00:00:00Z\",\"user_ids\":[\"<USER_ID>\"],\"limit\":100}"
-```
+For each target day:
+- `_eventId_validate=<weekdayRef>`
+- `<weekdayRef>=1`
 
-Ignore rows missing `start` or `end`.
+### Step 5: Commit block
 
-### Step 4: Compute per-day hours
+- `_eventId_submit=<okSubmitId>` (prefix from `okRef`, example: `591`)
+- `change-summary` containing `wd:OK Ref="<okRef>"`
 
-Split each interval by local calendar day and compute covered hours/day.
+## Idempotency and Recovery
 
-Output map:
-- `YYYY-MM-DD -> hours`
+- Prefer reading current week summary before writes; skip if already matching expected totals.
+- Retry a failed API call once.
+- If any step fails twice, discard flow and open a new flow for that same week.
+- Do not continue a partially failed flow.
 
-Skip zero-hour days.
+## Verification Policy
 
-## Workflow: Fill Timesheet from PagerDuty Month
+- Default: verify once per week after all blocks are submitted.
+- Fast mode: skip UI verification when user explicitly asks.
 
-### Step 1: Open Time
+## Safety
 
-Navigate to **Time**.
-
-### Step 2: Open needed week(s)
-
-Use **Select Week**, **Previous Week**, or **Next Week** to reach each week containing non-zero days.
-
-### Step 3: Preferred entry method: Actions -> Quick Add
-
-Prefer Quick Add over clicking day cells.
-
-1. Click `Actions` -> `Quick Add`
-2. Set `Time Type` to `On Call Standby Hours`
-3. Click `Next`
-4. Enter time blocks and select relevant day checkboxes
-5. Click `OK`
-
-If In/Out fields are shown:
-- Full day: `00:00` to `23:59`
-- Partial day `H` hours: `00:00` to `HH:MM`
-
-Examples:
-- `7h` -> `00:00-07:00`
-- `17h` -> `00:00-17:00`
-
-### Step 4: Validate each week
-
-Use `take_snapshot` and verify:
-- Day rows show expected `Hours: X`
-- Summary `On Call Standby (Hours)` equals expected weekly total
-- Entries show `Not Submitted`
-
-Never submit automatically.
-
-## Recovery Playbook (Observed in Real Run)
-
-Use these when Workday behaves inconsistently.
-
-### A) `Invalid response` browser alert after clicking Next
-
-- Call `handle_dialog` with `action: "accept"`
-- Re-snapshot and continue
-
-### B) `Discard Changes?` modal appears unexpectedly
-
-- Click `Continue` when keeping in-progress edits
-- Click `Discard` only when intentionally restarting the current Quick Add flow
-
-### C) Quick Add stuck with `Next`/`Cancel` disabled
-
-- Re-focus `Time Type`, press `Enter` to confirm selected value
-- Re-check for transient `Discard Changes?` modal and close it
-- If still stuck, close Quick Add and reopen from `Actions -> Quick Add`
-
-### D) Action click timeout or stale UIDs
-
-- Take a fresh snapshot and retry with current UIDs
-- Keep waits short and retry in small steps (prefer <=5s waits with re-check)
-
-## Tips
-
-- Prefer `take_snapshot` over screenshots
-- Workday is slow and dynamic; re-snapshot frequently
-- UIDs change often; only use UIDs from the latest snapshot
-- Workday date format is `DD/MM/YYYY`
-- Save as draft only; do not click submit unless the user explicitly asks
+- Save draft only; never submit timesheet unless explicitly requested.
+- Keep `credentials: "include"` in page-context fetch calls.
+- Always generate a fresh `clientRequestID` for each API request.

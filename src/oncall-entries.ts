@@ -55,7 +55,7 @@ interface RawEntry {
 // --- Core calculator ---
 
 export function calculateEntries(params: OnCallParams): WeekGroup[] {
-  var { startDate, endDate, shiftEndTime, incidents } = params;
+  var { startDate, endDate, shiftStartTime, shiftEndTime, incidents } = params;
   var start = parseDate(startDate);
   var end = parseDate(endDate);
 
@@ -65,8 +65,9 @@ export function calculateEntries(params: OnCallParams): WeekGroup[] {
 
   while (current <= end) {
     var dayYmd = formatDate(current);
+    var isFirstDay = dayYmd === startDate;
     var isLastDay = dayYmd === endDate;
-    var dayStart = '00:00';
+    var dayStart = isFirstDay ? (shiftStartTime || '00:00') : '00:00';
     var dayEnd = isLastDay ? shiftEndTime : '23:59';
 
     // Find incidents for this day, sorted by start time
@@ -181,6 +182,7 @@ function main() {
 
   var startDate = '';
   var endDate = '';
+  var shiftStartTime = '';
   var shiftEndTime = '';
   var incidents: Incident[] = [];
 
@@ -191,6 +193,9 @@ function main() {
         break;
       case '--end':
         endDate = args[++j];
+        break;
+      case '--shift-start':
+        shiftStartTime = args[++j];
         break;
       case '--shift-end':
         shiftEndTime = args[++j];
@@ -209,7 +214,13 @@ function main() {
     process.exit(1);
   }
 
-  var weeks = calculateEntries({ startDate, endDate, shiftEndTime, incidents });
+  var weeks = calculateEntries({
+    startDate,
+    endDate,
+    shiftStartTime: shiftStartTime || undefined,
+    shiftEndTime,
+    incidents,
+  });
 
   for (var week of weeks) {
     console.log(`# Week: ${week.weekStart}`);

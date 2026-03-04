@@ -6,19 +6,55 @@ import type { TimeEntry, WeekGroup } from '../types';
 const WORKDAY_URL = 'https://wd5.myworkday.com/cisco/d/home.htmld';
 const AUTH_FILE = path.join(__dirname, '..', '..', '.auth', 'state.json');
 
-/** Map 3-letter day abbreviations to full checkbox names */
-const DAY_MAP: Record<string, string> = {
-  Mon: 'Monday',
-  Tue: 'Tuesday',
-  Wed: 'Wednesday',
-  Thu: 'Thursday',
-  Fri: 'Friday',
-  Sat: 'Saturday',
-  Sun: 'Sunday',
+/** Map 3-letter day abbreviations to localized weekday checkbox names */
+const DAY_MAP: Record<string, string[]> = {
+  Mon: ['Monday', 'segunda-feira'],
+  Tue: ['Tuesday', 'terça-feira'],
+  Wed: ['Wednesday', 'quarta-feira'],
+  Thu: ['Thursday', 'quinta-feira'],
+  Fri: ['Friday', 'sexta-feira'],
+  Sat: ['Saturday', 'sábado'],
+  Sun: ['Sunday', 'domingo'],
 };
 
 export class EnterTimePage {
   constructor(private page: Page) {}
+
+  private getDayCheckbox(dayAbbr: string) {
+    var dayNames = DAY_MAP[dayAbbr];
+    if (!dayNames) throw new Error(`Unknown day abbreviation: ${dayAbbr}`);
+    return this.page.getByRole('checkbox', { name: new RegExp(`^(${dayNames.join('|')})$`, 'i') });
+  }
+
+  private getSelectWeekControl() {
+    return this.page.locator('a,button').filter({ hasText: /Select Week|Selecionar Semana/i }).first();
+  }
+
+  private getActionsButton() {
+    return this.page.getByRole('button', { name: /^(Actions|Ações)$/i });
+  }
+
+  private async closeSubmitTimeDialogIfOpen() {
+    var submitHeading = this.page.getByRole('heading', { name: /Submit Time|Submeter Tempo|Enviar Tempo/i });
+    var submitDialogs = this.page.getByRole('dialog').filter({ has: submitHeading });
+    var count = await submitDialogs.count();
+    if (count === 0) return;
+
+    for (var i = count - 1; i >= 0; i--) {
+      var submitDialog = submitDialogs.nth(i);
+      if (!(await submitDialog.isVisible().catch(() => false))) continue;
+
+      var closeButton = submitDialog.getByRole('button', { name: /^Close$|^Fechar$/i }).first();
+      if (await closeButton.isVisible().catch(() => false)) {
+        await closeButton.click();
+      } else {
+        await this.page.keyboard.press('Escape');
+      }
+
+      await submitDialog.waitFor({ state: 'hidden', timeout: 10_000 });
+      return;
+    }
+  }
 
   /** Navigate to Workday home, handling auth inline if session expired */
   async goto() {
@@ -54,38 +90,97 @@ export class EnterTimePage {
     await this.page.getByRole('button', { name: 'MENU' }).click();
     await this.page.getByRole('link', { name: 'Time' }).waitFor({ timeout: 10_000 });
     await this.page.getByRole('link', { name: 'Time' }).click();
-    // Wait for Enter Time page to load (look for This Week or Select Week)
-    await this.page.getByRole('link', { name: 'Select Week' }).waitFor({ timeout: 15_000 });
+    // UI variants render different controls; selectWeek() handles both button/link flows.
+    await this.page.waitForLoadState('domcontentloaded');
   }
 
   /** Open date picker, fill Day/Month/Year, click OK to navigate to a specific week */
   async selectWeek(date: string) {
+    await this.closeSubmitTimeDialogIfOpen();
+
     // date is YYYY-MM-DD — we need day, month, year as numbers
     var [yearStr, monthStr, dayStr] = date.split('-');
     var day = parseInt(dayStr, 10).toString();
     var month = parseInt(monthStr, 10).toString();
     var year = yearStr;
+    var dd = dayStr.padStart(2, '0');
+    var mm = monthStr.padStart(2, '0');
+    var monthLong = new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+      month: 'long',
+      timeZone: 'UTC',
+    });
+    var weekdayShort = new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+      weekday: 'short',
+      timeZone: 'UTC',
+    });
+    var dateField = this.page.getByRole('textbox', { name: /Date|Data/i });
+    var daySpinbutton = this.page.getByRole('spinbutton', { name: /Day|Dia/i });
+    var changeMonthYearButton = this.page
+      .getByRole('button', { name: /Change month and year|Alterar m[eê]s e ano|Mudar m[eê]s e ano/i })
+      .first();
+    var calendarRoot = this.page.locator('[role="application"]').first();
+    var prevMonthButton = this.page.getByRole('button', { name: /Previous month|M[eê]s anterior/i }).first();
+    var nextMonthButton = this.page.getByRole('button', { name: /Next month|Pr[oó]ximo m[eê]s/i }).first();
+    var calendarDateButton = this.page.getByRole('button', {
+      name: new RegExp(`${weekdayShort}\\s+${parseInt(dayStr, 10)}\\s+${monthLong}\\s+${year}`, 'i'),
+    });
 
-    await this.page.getByRole('link', { name: 'Select Week' }).click();
-    await this.page.getByRole('spinbutton', { name: 'Day' }).waitFor({ timeout: 10_000 });
+    var datePickerVisible = async () =>
+      (await dateField.isVisible({ timeout: 1_500 }).catch(() => false)) ||
+      (await daySpinbutton.isVisible({ timeout: 1_500 }).catch(() => false));
 
-    // GWT spinbuttons don't respond to fill() — click, select all, type
-    for (var [name, value] of [['Day', day], ['Month', month], ['Year', year]] as const) {
-      var spinbutton = this.page.getByRole('spinbutton', { name });
-      await spinbutton.click();
-      await this.page.keyboard.press('Meta+A');
-      await this.page.keyboard.type(value);
+    if (!(await datePickerVisible())) {
+      // Workday varies between link/button/header trigger for week picker; try all known variants.
+      await this.getSelectWeekControl().click({ timeout: 3_000 }).catch(() => {});
+    }
+    if (!(await datePickerVisible())) {
+      await changeMonthYearButton.click({ timeout: 3_000 }).catch(() => {});
     }
 
-    await this.page.getByRole('button', { name: 'OK' }).click();
+    var calendarVisible = await calendarRoot.isVisible({ timeout: 1_500 }).catch(() => false);
+    if (!(await datePickerVisible()) && !calendarVisible) {
+      throw new Error('Failed to open week picker.');
+    }
+
+    if (await dateField.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      // Newer modal variant uses a single locale date field (DD/MM/YYYY)
+      await dateField.click();
+      await this.page.keyboard.press('Meta+A');
+      // Masked Workday date inputs are more reliable with digit typing than fill()
+      await this.page.keyboard.type(`${dd}${mm}${year}`);
+      await this.page.keyboard.press('Tab');
+    } else if (await daySpinbutton.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      // Legacy variant uses separate Day/Month/Year spinbuttons
+      await daySpinbutton.waitFor({ timeout: 10_000 });
+      for (var [name, value] of [['Day|Dia', day], ['Month|Mês|Mes', month], ['Year|Ano', year]] as const) {
+        var spinbutton = this.page.getByRole('spinbutton', { name: new RegExp(name, 'i') });
+        await spinbutton.click();
+        await this.page.keyboard.press('Meta+A');
+        await this.page.keyboard.type(value);
+      }
+      await this.page.getByRole('button', { name: 'OK' }).click();
+    } else {
+      // Calendar popover variant from "Change month and year".
+      for (var i = 0; i < 14; i++) {
+        if (await calendarDateButton.isVisible({ timeout: 300 }).catch(() => false)) break;
+        await nextMonthButton.click().catch(() => {});
+      }
+      if (!(await calendarDateButton.isVisible({ timeout: 300 }).catch(() => false))) {
+        for (var i = 0; i < 14; i++) {
+          if (await calendarDateButton.isVisible({ timeout: 300 }).catch(() => false)) break;
+          await prevMonthButton.click().catch(() => {});
+        }
+      }
+      await calendarDateButton.first().click({ timeout: 10_000 });
+    }
 
     // Wait for the Enter Time page to reload with the new week
-    await this.page.getByRole('button', { name: 'Actions', exact: true }).waitFor({ timeout: 30_000 });
+    await this.getActionsButton().waitFor({ timeout: 30_000 });
   }
 
   /** Click Actions → Quick Add to open the Quick Add dialog */
   async openQuickAdd() {
-    await this.page.getByRole('button', { name: 'Actions', exact: true }).click();
+    await this.getActionsButton().click();
     await this.page.getByRole('option', { name: 'Quick Add' }).waitFor({ timeout: 5_000 });
     await this.page.getByRole('option', { name: 'Quick Add' }).click();
     // Wait for the Quick Add dialog
@@ -139,8 +234,8 @@ export class EnterTimePage {
     var nextBtn = this.page.getByRole('button', { name: 'Next' });
     await nextBtn.waitFor({ state: 'visible', timeout: 5_000 });
     await nextBtn.click();
-    // Wait for step 2: day checkboxes are unique to the time/day form
-    await this.page.getByRole('checkbox', { name: 'Monday' }).waitFor({ timeout: 30_000 });
+    // Wait for step 2: localized weekday checkboxes are unique to the time/day form
+    await this.getDayCheckbox('Mon').waitFor({ timeout: 30_000 });
   }
 
   /** Fill In/Out times and check the appropriate day checkboxes */
@@ -160,9 +255,7 @@ export class EnterTimePage {
 
     // Check day boxes — GWT checkboxPanel wraps each checkbox
     for (var dayAbbr of entry.days) {
-      var fullDay = DAY_MAP[dayAbbr];
-      if (!fullDay) throw new Error(`Unknown day abbreviation: ${dayAbbr}`);
-      await this.page.getByRole('checkbox', { name: fullDay }).check({ force: true });
+      await this.getDayCheckbox(dayAbbr).check({ force: true });
     }
   }
 
@@ -170,9 +263,7 @@ export class EnterTimePage {
   async verifyEntry(entry: TimeEntry) {
     // Verify day checkboxes are checked
     for (var dayAbbr of entry.days) {
-      var fullDay = DAY_MAP[dayAbbr];
-      if (!fullDay) throw new Error(`Unknown day abbreviation: ${dayAbbr}`);
-      await expect(this.page.getByRole('checkbox', { name: fullDay })).toBeChecked();
+      await expect(this.getDayCheckbox(dayAbbr)).toBeChecked();
     }
   }
 
@@ -186,7 +277,7 @@ export class EnterTimePage {
 
     // Race: either "Quick Add Complete" text or an error badge button appears
     var quickAddComplete = this.page.getByText('Quick Add Complete').first();
-    var errorBadge = this.page.getByRole('button', { name: /\d+ Error/ });
+    var errorBadge = this.page.getByRole('button', { name: /\d+ Errors?/ });
 
     var winner = await Promise.race([
       quickAddComplete.waitFor({ timeout: 20_000 }).then(() => 'success' as const),
@@ -214,8 +305,14 @@ export class EnterTimePage {
       console.log('  Skipping: entries already exist (overlap detected)');
       // Cancel the Quick Add form
       await this.page.getByRole('button', { name: 'Cancel' }).click();
-      // Wait for the Quick Add dialog to close and time grid to reappear
-      await this.page.getByRole('button', { name: 'Actions', exact: true }).waitFor({ timeout: 15_000 });
+      // Some Workday variants ask for explicit discard confirmation after Cancel
+      var discardDialog = this.page.getByRole('dialog', { name: /Discard Changes\?/i });
+      if (await discardDialog.isVisible({ timeout: 3_000 }).catch(() => false)) {
+        await discardDialog.getByRole('button', { name: /^Discard$/i }).click();
+      }
+      // Wait for the Quick Add dialog to close, then for the page action bar to reappear
+      await this.page.getByRole('dialog', { name: 'Quick Add' }).waitFor({ state: 'hidden', timeout: 15_000 });
+      await this.getActionsButton().waitFor({ timeout: 30_000 });
       return 'overlap';
     }
 
@@ -239,6 +336,7 @@ export class EnterTimePage {
   /** Select a week and enter all its entries */
   async enterWeek(week: WeekGroup) {
     console.log(`\nWeek: ${week.weekStart} (${week.entries.length} entries)`);
+    await this.navigateToTime();
     await this.selectWeek(week.weekStart);
 
     var added = 0;
@@ -249,13 +347,6 @@ export class EnterTimePage {
       else added++;
     }
     console.log(`  Week done: ${added} added, ${skipped} skipped (already exist)`);
-  }
-
-  /** Click the Review data button */
-  async clickReview() {
-    await this.page.getByRole('button', { name: /Review data/ }).click();
-    // Wait for review/submit page to load
-    await this.page.getByRole('button', { name: 'Submit' }).waitFor({ timeout: 15_000 });
   }
 
   /** Click Submit */
